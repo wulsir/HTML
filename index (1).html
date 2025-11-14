@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>帶電粒子模擬器</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b84ff">
+<style>
+  :root{--bg:#eef7ff;--card:#fff;--accent:#0b84ff;--muted:#444;}
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans',Arial;}
+  body{background:var(--bg);display:flex;flex-direction:column;align-items:stretch;padding:6px;box-sizing:border-box;}
+  header{padding:8px 12px;display:flex;align-items:center;gap:8px;background:#fff;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,0.06);margin-bottom:8px;}
+  header h1{font-size:16px;margin:0;}
+  .container{display:flex;gap:8px;flex:1;height:calc(100vh - 120px);}
+  .left{flex:1;display:flex;flex-direction:column;gap:8px;}
+  .card{background:#fff;border-radius:10px;padding:8px;box-shadow:0 1px 6px rgba(0,0,0,0.06);height:100%;display:flex;flex-direction:column;}
+  canvas{flex:1;border-radius:8px;background:linear-gradient(#f7fbff,#ffffff);width:100%;height:100%;display:block;}
+  .right{width:320px;min-width:260px;max-width:360px;display:flex;flex-direction:column;gap:8px;}
+  .controls{display:flex;flex-direction:column;gap:8px;overflow:auto;padding:6px;}
+  .row{display:flex;gap:6px;align-items:center;}
+  label{min-width:120px;color:var(--muted);font-size:13px;}
+  input[type=range]{flex:1;}
+  input[type=number]{width:110px;padding:6px;border-radius:6px;border:1px solid #ddd;}
+  select{padding:6px;border-radius:6px;border:1px solid #ddd;}
+  button{padding:8px 10px;border-radius:8px;border:none;background:var(--accent);color:white;font-weight:600;cursor:pointer;}
+  button.ghost{background:transparent;color:var(--accent);border:2px solid var(--accent);}
+  .small{font-size:12px;color:#666;}
+  footer{padding:8px;text-align:center;font-size:12px;color:#666;}
+  @media (max-width:900px){ .container{flex-direction:column;height:auto;} .right{width:100%} header h1{font-size:15px} }
+</style>
+</head>
+<body>
+<header><h1>⚡ 帶電粒子 — 平行射入平行板電場模擬器 (橫式)</h1></header>
+<div class="container">
+  <div class="left card">
+    <canvas id="simCanvas" aria-label="模擬畫布"></canvas>
+    <div class="small" id="info">準備中 — 調整參數後按「開始」</div>
+  </div>
+  <div class="right card controls">
+    <div class="row"><label>初速度 v (m/s)</label><input id="speed" type="range" min="0" max="300" value="120"><input id="speedNum" type="number" min="0" max="300" value="120"></div>
+    <div class="row"><label>電荷 q (C)</label><input id="charge" type="range" min="-0.0001" max="0.0001" step="1e-8" value="0.000001"><input id="chargeNum" type="number" step="1e-8" value="0.000001"></div>
+    <div class="row"><label>電場 E (N/C)</label><input id="efield" type="range" min="-20000" max="20000" step="10" value="5000"><input id="efieldNum" type="number" step="10" value="5000"></div>
+    <div class="row"><label>質量 m (kg)</label><input id="mass" type="range" min="0.00001" max="0.1" step="0.00001" value="0.001"><input id="massNum" type="number" step="0.00001" value="0.001"></div>
+    <div class="row"><label>板間距 d (m)</label><input id="plateGap" type="range" min="0.01" max="0.5" step="0.01" value="0.12"><input id="plateGapNum" type="number" step="0.01" value="0.12"></div>
+    <div class="row"><label>板長 L (m)</label><input id="plateLength" type="range" min="0.05" max="2" step="0.01" value="1.2"><input id="plateLengthNum" type="number" step="0.01" value="1.2"></div>
+    <div class="row"><label>電場方向</label><select id="efDir"><option value="down" selected>向下 (E&gt;0)</option><option value="up">向上</option></select></div>
+    <div class="row"><label>重力</label><input id="gravToggle" type="checkbox"></div>
+    <div class="row"><label>顯示軌跡</label><input id="trailToggle" type="checkbox" checked></div>
+    <div class="row" style="margin-top:6px;"><button id="startBtn">開始</button><button id="pauseBtn" class="ghost">暫停</button><button id="resetBtn" class="ghost">重設</button></div>
+    <div class="small">說明：粒子從左方水平射入板間，在板內受均勻電場 a = qE/m，出板後電場消失。</div>
+  </div>
+</div>
+<footer>安裝：使用 Chrome 打開本頁 → 選單 → 「加入主畫面」</footer>
+
+<script>
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(()=>{}); }
+
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+let W=900, H=560, dpi = window.devicePixelRatio || 1;
+function adaptCanvas(){ const rect = canvas.getBoundingClientRect(); W = Math.floor(rect.width)||900; H = Math.floor(rect.height)||560; canvas.width = Math.max(800, W * dpi); canvas.height = Math.max(480, H * dpi); canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px'; ctx.setTransform(dpi,0,0,dpi,0,0); }
+window.addEventListener('resize', adaptCanvas); adaptCanvas();
+
+const speed = document.getElementById('speed'), speedNum = document.getElementById('speedNum');
+const charge = document.getElementById('charge'), chargeNum = document.getElementById('chargeNum');
+const efield = document.getElementById('efield'), efieldNum = document.getElementById('efieldNum');
+const mass = document.getElementById('mass'), massNum = document.getElementById('massNum');
+const plateGap = document.getElementById('plateGap'), plateGapNum = document.getElementById('plateGapNum');
+const plateLength = document.getElementById('plateLength'), plateLengthNum = document.getElementById('plateLengthNum');
+const efDir = document.getElementById('efDir'), gravToggle = document.getElementById('gravToggle');
+const trailToggle = document.getElementById('trailToggle');
+const startBtn = document.getElementById('startBtn'), pauseBtn = document.getElementById('pauseBtn'), resetBtn = document.getElementById('resetBtn');
+const info = document.getElementById('info');
+
+function sync(a,b){ a.addEventListener('input',()=>b.value=a.value); b.addEventListener('input',()=>a.value=b.value); }
+sync(speed,speedNum); sync(charge,chargeNum); sync(efield,efieldNum); sync(mass,massNum); sync(plateGap,plateGapNum); sync(plateLength,plateLengthNum);
+
+let pixelsPerMeterDefault = 180; let pixelsPerMeter = pixelsPerMeterDefault;
+let running=false, paused=false, particle=null, trailOn=true, trail=[]; let lastTime=null;
+
+function initParticle(){
+  const v = parseFloat(speed.value); const q = parseFloat(charge.value); const Eraw = parseFloat(efield.value);
+  const m = parseFloat(mass.value); const gap = parseFloat(plateGap.value); const L = parseFloat(plateLength.value);
+  const sign = (efDir.value==='down')?1:-1; const E = Eraw * sign; const gOn = gravToggle.checked; const g = gOn?9.81:0;
+  const plateStart_m = 0.8; const startX_m = 0.2; const plateStartX = plateStart_m; const plateEndX = plateStart_m + L;
+  const yCenter_m = (H / pixelsPerMeter)/2;
+  particle = { x:startX_m, y:yCenter_m, vx:v, vy:0, q:q, E:E, m:m, g:g, plateStartX:plateStartX, plateEndX:plateEndX, plateGap:gap };
+  trail = []; lastTime=null; running=true; paused=false; trailOn = trailToggle.checked; updateInfo();
+}
+
+function step(dt){
+  if(!particle) return;
+  const p = particle;
+  const inside = (p.x >= p.plateStartX && p.x <= p.plateEndX);
+  const a_e = inside ? (p.q * p.E) / p.m : 0;
+  const a_g = p.g || 0;
+  const ay = a_e + a_g; const ax = 0;
+  p.vx += ax * dt; p.vy += ay * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+  trail.push({x:p.x,y:p.y}); if(trail.length>1200) trail.shift(); updateInfo();
+}
+
+function physToPixel(x_m,y_m){ const leftMargin_px=60; const bottomMargin_px=60; const x_px=leftMargin_px + x_m * pixelsPerMeter; const y_px = H - bottomMargin_px - y_m * pixelsPerMeter; return {x:x_px,y:y_px}; }
+
+function drawPlates(ts){
+  const leftMargin_px=60; const bottomMargin_px=60;
+  const plateStartX_m = particle ? particle.plateStartX : 0.8;
+  const plateLength_m = parseFloat(plateLength.value); const plateGap_m = parseFloat(plateGap.value);
+  const plateStart_px = leftMargin_px + plateStartX_m * pixelsPerMeter; const plateEnd_px = plateStart_px + plateLength_m * pixelsPerMeter;
+  const gapCenter_m = (H / pixelsPerMeter)/2;
+  const topPlate_y_px = H - bottomMargin_px - (gapCenter_m + plateGap_m/2) * pixelsPerMeter;
+  const bottomPlate_y_px = H - bottomMargin_px - (gapCenter_m - plateGap_m/2) * pixelsPerMeter;
+  const plateThickness_px = 14;
+  ctx.fillStyle='#222'; ctx.fillRect(0, topPlate_y_px - plateThickness_px/2, W, plateThickness_px); ctx.fillRect(0, bottomPlate_y_px - plateThickness_px/2, W, plateThickness_px);
+  ctx.fillStyle='white'; ctx.font='14px sans-serif'; ctx.textAlign='left'; ctx.fillText('上板',12,topPlate_y_px+5); ctx.fillText('下板',12,bottomPlate_y_px+5);
+  ctx.strokeStyle='rgba(0,0,0,0.25)'; ctx.lineWidth=2; ctx.strokeRect(plateStart_px, topPlate_y_px + plateThickness_px/2, plateLength_m * pixelsPerMeter, bottomPlate_y_px - topPlate_y_px - plateThickness_px);
+  const arrowSpacing = 40; const arrowDir = (efDir.value==='down')?1:-1;
+  for(let x=plateStart_px+20;x<plateEnd_px-10;x+=arrowSpacing){ for(let y=topPlate_y_px+30;y<bottomPlate_y_px-10;y+=28){ drawArrow(x,y,arrowDir,ts); } }
+  const screenX_px = plateEnd_px + 140; ctx.fillStyle='#444'; ctx.fillRect(screenX_px, topPlate_y_px - 30, 8, bottomPlate_y_px - topPlate_y_px + 60); ctx.fillStyle='#fff'; ctx.font='12px sans-serif'; ctx.textAlign='left'; ctx.fillText('螢幕',screenX_px+12,topPlate_y_px+6);
+  return {plateStart_px,plateEnd_px,topPlate_y_px,bottomPlate_y_px};
+}
+
+function drawArrow(x,y,dir,ts){ ctx.save(); ctx.translate(x,y); const phase = ((ts||0)/600)%1; const offset = Math.sin((x+y)/70 + phase*6.28)*6; ctx.translate(offset,0); ctx.beginPath(); if(dir>0){ctx.moveTo(0,-8);ctx.lineTo(0,8);ctx.moveTo(-5,4);ctx.lineTo(0,8);ctx.lineTo(5,4);} else {ctx.moveTo(0,8);ctx.lineTo(0,-8);ctx.moveTo(-5,-4);ctx.lineTo(0,-8);ctx.lineTo(5,-4);} ctx.lineWidth=2; ctx.strokeStyle='rgba(10,70,150,0.85)'; ctx.stroke(); ctx.restore(); }
+
+function drawParticle(){ if(!particle) return; const pos = physToPixel(particle.x,particle.y); if(trailOn && trail.length>0){ ctx.beginPath(); for(let i=0;i<trail.length;i++){ const t=trail[i]; const p=physToPixel(t.x,t.y); if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y); } ctx.lineWidth=2; ctx.strokeStyle='rgba(80,160,255,0.9)'; ctx.stroke(); } ctx.beginPath(); ctx.arc(pos.x,pos.y,8,0,Math.PI*2); ctx.fillStyle='#d54747'; ctx.fill(); ctx.beginPath(); ctx.moveTo(pos.x,pos.y); ctx.lineTo(pos.x + particle.vx * 0.06 * pixelsPerMeter, pos.y - particle.vy * 0.06 * pixelsPerMeter); ctx.strokeStyle='rgba(0,0,0,0.6)'; ctx.lineWidth=2; ctx.stroke(); }
+
+function updateInfo(){ if(!particle){ info.textContent='尚未開始 (按開始)'; return;} const p=particle; const inside=(p.x>=p.plateStartX && p.x<=p.plateEndX); info.textContent=`x=${p.x.toFixed(3)} m, y=${p.y.toFixed(3)} m · v_x=${p.vx.toFixed(3)} m/s · v_y=${p.vy.toFixed(3)} m/s · ${inside?'在板內':''}`; }
+
+function drawScene(ts){ ctx.clearRect(0,0,W,H); const plates = drawPlates(ts); drawParticle(); }
+
+function renderLoop(ts){ if(!running){ lastTime=null; return;} if(paused){ lastTime=ts; requestAnimationFrame(renderLoop); return;} if(lastTime===null) lastTime=ts; let dtMs = ts-lastTime; if(dtMs>80) dtMs=80; lastTime=ts; const dt = dtMs/1000; step(dt); drawScene(ts); const posP = particle ? physToPixel(particle.x, particle.y) : null; if(particle && (posP.x > W + 50 || posP.y < -50 || posP.y > H + 50)){ running=false; updateInfo(); info.textContent += ' （粒子離開畫面，模擬停止）'; return; } const plateStartX_m = particle.plateStartX; const plateEndX_m = particle.plateEndX; const gap = particle.plateGap; const gapCenter_m = (H / pixelsPerMeter)/2; const topEdge_m = gapCenter_m + gap/2; const bottomEdge_m = gapCenter_m - gap/2; if(particle.x >= plateStartX_m && particle.x <= plateEndX_m){ if(particle.y > topEdge_m || particle.y < bottomEdge_m){ running=false; info.textContent = `粒子撞到板，位置 x=${particle.x.toFixed(3)} m, y=${particle.y.toFixed(3)} m`; drawScene(ts); return; } } requestAnimationFrame(renderLoop); }
+
+startBtn.addEventListener('click', ()=>{ initParticle(); running=true; paused=false; lastTime=null; requestAnimationFrame(renderLoop); pauseBtn.textContent='暫停'; pauseBtn.classList.remove('ghost'); });
+pauseBtn.addEventListener('click', ()=>{ if(!running) return; paused=!paused; pauseBtn.textContent = paused? '繼續':'暫停'; pauseBtn.classList.toggle('ghost', !paused); });
+resetBtn.addEventListener('click', ()=>{ running=false; paused=false; particle=null; trail=[]; lastTime=null; ctx.clearRect(0,0,W,H); drawPlates(); info.textContent='已重設，調參數後按開始。'; pauseBtn.textContent='暫停'; pauseBtn.classList.add('ghost'); });
+trailToggle.addEventListener('change', ()=>{ trailOn = trailToggle.checked; });
+
+adaptCanvas(); drawPlates(); document.querySelectorAll('input').forEach(i=> i.addEventListener('keydown',(ev)=>{ if(ev.key==='Enter') startBtn.click(); }));
+</script>
+</body>
+</html>
